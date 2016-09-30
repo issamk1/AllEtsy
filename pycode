@@ -1,0 +1,122 @@
+import urllib
+import re
+from dupl import remove_duplicates
+from BeautifulSoup import *
+from urlparse import urlparse
+import twurl
+import json
+import sqlite3
+
+# url = "https://www.etsy.com/teams/5399/etsy-ny-team/members?sort=update_date&page=1"
+url1 = "https://www.etsy.com/search/shops?page="
+TWITTER_URL = 'https://api.twitter.com/1.1/users/show.json'
+
+conn = sqlite3.connect('EtsyNow1.sqlite')
+cur = conn.cursor()
+
+cur.execute('''
+DROP TABLE IF EXISTS Etsy''')
+
+cur.execute('''
+CREATE TABLE Etsy (Shop TEXT, URL TEXT, Location TEXT, TWName TEXT, TWFollowers INTEGER,
+                    Sales INTEGER, MemberSince INTEGER)''')
+
+shopurls = list()
+# CONTINUE FROM PAGE
+for i in range(1013, 1240):
+    url = url1 + str(i)
+    print "Retreiving Page URL Number: ", i
+    sock = urllib.urlopen(url).read()
+    soup = BeautifulSoup(sock)
+    atags = soup('a')
+    for atag in atags:
+        pageurls = str(atag.get('href', None))
+        if pageurls.startswith('https://www.etsy.com/shop'):
+            shopurls.append(pageurls)
+            ShopURL = str(shopurls[-1])
+            print "Retreived Shop URL: ", ShopURL
+            sock1 = urllib.urlopen(pageurls).read()
+            soup1 = BeautifulSoup(sock1)
+            loctag = soup1.findAll("span", { "class" : "shop-location" })
+            if len(loctag) == 0:
+                print "NO LOCATION"
+                continue
+            else:
+                # print "Location Tag: ", loctag
+                splith1 = str(loctag).split('>')
+                # print splith1
+                splith12 = str(splith1[1]).split('<')
+                # print splith12
+                location = splith12[0]
+                print "Location: ", location
+                if "New York" in location or "NY" in location or "Brooklyn" in location or "United States" in location:
+                    print "LOCATION: ", location
+                    nametag = soup1.findAll("h1", { "class" : "text-center mb-xs-1" })
+                    splith1 = str(nametag).split('>')
+                    splith12 = str(splith1[1]).split('<')
+                    shopname = splith12[0]
+                    print "Retreived - Etsy NY/US Shop Name: ", shopname
+                    # put here after done
+                    try:
+                        y = soup1.find(title = "Twitter")
+                        twlink = y.get('href')
+                    except:
+                        print "NO TWITTER"
+                        continue
+                    print "Retreiving Twitter: ", twlink
+                    print "Retreived - Twitter: ", twlink
+                    twsplits = twlink.split('/')
+                    acct = twsplits[-1]
+                    print "Retreived - Twitter Account: ", acct
+                    try:
+                        url = twurl.augment(TWITTER_URL,
+                        {'screen_name': acct, 'count': '5'} )
+                        connection = urllib.urlopen(url)
+                        data = connection.read()
+                        headers = connection.info().dict
+                        js = json.loads(data)
+                        followers = int(js['followers_count'])
+                        acct = js['screen_name']
+                    except:
+                        print "Twitter URL Corrupted"
+                        continue
+                    print "Twitter Name: ", acct
+                    print "Number of Twitter Followers: ", followers
+                    print 'Remaining API Calls: ', headers['x-rate-limit-remaining']
+                    if int(headers['x-rate-limit-remaining']) == 1:
+                        print "TAKE 15-MINUTE BREAK!! !! !! !! !! !! !!"
+                        break
+                    #IF TW FOLLOWERS >500 INSERT INTO - CONTINUE
+                    if followers > 500:
+                        print "Database Twitter Name: ", acct
+                        print js['screen_name'], "has", js['followers_count'], "followers"
+                        # GET Number of Sales
+                        saletag = soup1.findAll("span", { "class" : "mr-xs-2 pr-xs-2 br-xs-1" })
+                        # print "Sales Tag: ", saletag[0]
+                        splith1 = str(saletag[0]).split(' Sales')
+                        splith12 = str(splith1[0]).split('>')
+                        Sales = splith12[-1]
+                        print "Number of Sales: ", Sales
+                        # GET Number of Favorites
+                        etsytag = soup1.findAll("span", { "class" : "etsy-since no-wrap" })
+                        splith1 = str(etsytag[0]).split('On Etsy since ')
+                        splith12 = str(splith1[-1]).split('<')
+                        EtsySince = splith12[0]
+                        print "On Etsy Since Tag: ", EtsySince
+                        cur.execute('SELECT Shop FROM Etsy WHERE Shop = ? ', (shopname, ))
+                        row = cur.fetchone()
+                        cur.execute('''INSERT INTO Etsy (Shop, URL, Location, TWName, TWFollowers, Sales, MemberSince)
+                                    VALUES ( ?, ?, ?, ?, ?, ?, ?)''', ( shopname, shopurls[-1], location, acct, followers, Sales, EtsySince) )
+
+                        # ADD to database
+                    else:
+                        print "LESS THAN 500 FOLLOWERS"
+                        continue
+                    conn.commit()
+                        # PUT IF STATEMENT TO EITHER INSERT TO TABLE OR CONTINUE
+
+
+                else:
+                    print "OUTSIDE THE USA"
+                    continue
+cur.close()
